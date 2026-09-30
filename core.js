@@ -20,6 +20,7 @@ export function saveDay(s, input, originalDate=null) {
   requireDate(input.date);
   if(originalDate && originalDate!==input.date && s.days.some(d=>d.date===input.date)) throw new Error('那一天已有阅读记录，请打开那天修改。');
   let item=s.days.find(d=>d.date===(originalDate||input.date));
+  if(item?.readings)throw new Error('这一天有多次阅读，请逐次编辑。');
   const fields={date:input.date,bookIds:[...new Set(input.bookIds||[])],minutes:minutesValue(input.minutes),mode:input.mode||'',updatedAt:new Date().toISOString()};
   if(fields.bookIds.some(id=>!s.books.some(b=>b.id===id))) throw new Error('这本书已发生变化，请重新选择。');
   if(!['','亲子共读','孩子自己读','轮流读'].includes(fields.mode)) throw new Error('请选择有效的阅读方式。');
@@ -31,6 +32,54 @@ export function checkIn(s,date=today()) {
   if(s.days.some(d=>d.date===date)) return false;
   saveDay(s,{date,bookIds:s.books.some(b=>b.id===s.selectedBook&&!b.archived)?[s.selectedBook]:[],minutes:null});
   return true;
+}
+export const bookStatuses=[['all','全部'],['reading','正在读'],['want','想读'],['done','已读完']];
+export function filterBooks(books,status='all',query='') {
+  const q=query.trim().toLocaleLowerCase(),rank={reading:0,want:1,done:2};
+  return books.filter(b=>!b.archived&&(status==='all'||b.status===status)&&b.title.toLocaleLowerCase().includes(q)).sort((a,b)=>rank[a.status]-rank[b.status]);
+}
+export function readingEntries(day) {
+  if(!day)return [];
+  return day.readings?[...day.readings].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)):[{id:day.id,minutes:day.minutes,bookIds:day.bookIds,mode:day.mode,source:'legacy',startedAt:null,endedAt:null,createdAt:day.createdAt,updatedAt:day.updatedAt}];
+}
+export function readingSummary(day) {
+  const entries=readingEntries(day),known=entries.filter(r=>r.minutes!==null);
+  return {count:entries.length,known:known.length,unknown:entries.length-known.length,minutes:known.reduce((n,r)=>n+r.minutes,0),legacy:entries.some(r=>r.source==='legacy')};
+}
+export function timedMinutes(start,end,now=Date.now()) {
+  const a=Date.parse(start),b=Date.parse(end);
+  if(!Number.isFinite(a)||!Number.isFinite(b)||a<Date.parse('1900-01-01')||b<=a||b>now)throw new Error('结束时间须晚于开始时间，且不能是未来时间。');
+  if(b-a>86400000)throw new Error('这次计时超过24小时，请修正结束时间，或填写大约分钟数。');
+  return Math.max(1,Math.round((b-a)/60000));
+}
+function aggregateReadings(day,readings) {
+  const known=readings.filter(r=>r.minutes!==null),minutes=known.length?known.reduce((n,r)=>n+r.minutes,0):null;
+  if(minutes>1440)throw new Error('当天已记录时长超过24小时，请检查是否重复记录。');
+  return {...day,readings,minutes,bookIds:[...new Set(readings.flatMap(r=>r.bookIds))],mode:readings.every(r=>r.mode===readings[0].mode)?readings[0].mode:'',updatedAt:new Date().toISOString()};
+}
+export function saveReading(s,input,id=uid(),editing=false) {
+  requireDate(input.date);if(!isID(id))throw new Error('无效的阅读记录。');
+  const original=s.days.find(d=>readingEntries(d).some(r=>r.id===id)),old=readingEntries(original).find(r=>r.id===id);
+  if(editing&&!old)throw new Error('这次阅读已不存在，请重新打开。');
+  if(!editing&&old)return old;
+  const minutes=minutesValue(input.minutes),bookIds=[...new Set(input.bookIds||[])],mode=input.mode||'';
+  if(bookIds.some(id=>!s.books.some(b=>b.id===id)))throw new Error('这本书已发生变化，请重新选择。');
+  if(!['','亲子共读','孩子自己读','轮流读'].includes(mode))throw new Error('请选择有效的阅读方式。');
+  const startedAt=input.startedAt||null,endedAt=input.endedAt||null;
+  if((startedAt===null)!==(endedAt===null)||(startedAt&&timedMinutes(startedAt,endedAt)!==minutes))throw new Error('起止时间与分钟数不一致，请重新确认。');
+  if(minutes>120&&!input.confirmLong)throw new Error('这次超过2小时，请确认阅读时长。');
+  const at=new Date().toISOString(),entry={id,minutes,bookIds,mode,source:old?.source||input.source||'manual',startedAt,endedAt,createdAt:old?.createdAt||at,updatedAt:at};
+  if(!['legacy','manual','timer'].includes(entry.source))throw new Error('无效的阅读来源。');
+  const next=s.days.filter(d=>d!==original),remaining=readingEntries(original).filter(r=>r.id!==id);
+  if(remaining.length)next.push(aggregateReadings(original,remaining));
+  const target=next.find(d=>d.date===input.date),base=target||{id:original?.date===input.date?original.id:uid(),date:input.date,createdAt:original?.date===input.date?original.createdAt:at};
+  const updated=aggregateReadings(base,[...readingEntries(target),entry]);
+  s.days=[...next.filter(d=>d!==target),updated];return entry;
+}
+export function deleteReading(s,id) {
+  const day=s.days.find(d=>readingEntries(d).some(r=>r.id===id));if(!day)throw new Error('这次阅读已不存在。');
+  const remaining=readingEntries(day).filter(r=>r.id!==id);
+  s.days=s.days.filter(d=>d!==day);if(remaining.length)s.days.push(aggregateReadings(day,remaining));
 }
 export function bookWordRange(book) {
   return {min:book?.wordCountMin??book?.wordCount??null,max:book?.wordCountMax??book?.wordCount??null};
@@ -87,7 +136,7 @@ export function saveShare(s,input,id=null) {
   return item;
 }
 export function stats(s) {
-  return {days:s.days.length,books:s.books.filter(b=>b.status==='done').length,minutes:s.days.reduce((n,d)=>n+(d.minutes||0),0),unknown:s.days.filter(d=>d.minutes==null).length,shares:s.shares.length};
+  return {days:s.days.length,books:s.books.filter(b=>b.status==='done').length,minutes:s.days.reduce((n,d)=>n+(d.minutes||0),0),unknown:s.days.filter(d=>readingSummary(d).unknown>0).length,shares:s.shares.length};
 }
 export const milestones=[
   {id:'start',name:'启航港',desc:'第一个阅读日',kind:'days',target:1,reward:'勇气小船',story:'小狐狸团团准备了一只纸船。带上你的第一段故事，我们出发吧！',found:'小船扬起了帆。你的第一个故事，已经让探险开始了。'},
@@ -116,9 +165,20 @@ export function validateState(s,audioIds=[]) {
   }
   for(const b of s.books) if(!bounded(b.title,120)||!b.title.trim()||!bounded(b.author,80)||!bounded(b.category,40)||typeof b.archived!=='boolean'||!['want','reading','done'].includes(b.status)||(b.status==='done'?!validDate(b.completedDate):b.completedDate!==null)) fail();
   for(const item of [...s.days,...s.shares])if(!timestamp(item.createdAt)||!timestamp(item.updatedAt))fail();
+  const readingIds=new Set();
   for(const d of s.days) {
     if(!validDate(d.date)||dates.has(d.date)||!Array.isArray(d.bookIds)||new Set(d.bookIds).size!==d.bookIds.length||d.bookIds.some(id=>!bookIds.has(id))||!(d.minutes===null||(Number.isInteger(d.minutes)&&d.minutes>=1&&d.minutes<=1440))||!['','亲子共读','孩子自己读','轮流读'].includes(d.mode)) fail();
     dates.add(d.date);
+    if(d.readings!==undefined){
+      if(!Array.isArray(d.readings)||!d.readings.length||d.readings.length>50000)fail();
+      for(const r of d.readings){
+        if(!r||!isID(r.id)||readingIds.has(r.id)||!timestamp(r.createdAt)||!timestamp(r.updatedAt)||!['manual','timer','legacy'].includes(r.source)||!(r.minutes===null||(Number.isInteger(r.minutes)&&r.minutes>=1&&r.minutes<=1440))||!Array.isArray(r.bookIds)||new Set(r.bookIds).size!==r.bookIds.length||r.bookIds.some(id=>!bookIds.has(id))||!['','亲子共读','孩子自己读','轮流读'].includes(r.mode))fail();
+        if(r.startedAt!==null||r.endedAt!==null){if(!timestamp(r.startedAt)||!timestamp(r.endedAt)||timedMinutes(r.startedAt,r.endedAt)!==r.minutes)fail();}
+        readingIds.add(r.id);
+      }
+      const expected=aggregateReadings(d,d.readings);
+      if(expected.minutes!==d.minutes||expected.mode!==d.mode||expected.bookIds.length!==d.bookIds.length||expected.bookIds.some(id=>!d.bookIds.includes(id)))fail();
+    }else {if(readingIds.has(d.id))fail();readingIds.add(d.id);}
   }
   const referenced=new Set();
   for(const x of s.shares) {
