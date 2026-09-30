@@ -1,0 +1,56 @@
+# 阅读小屋 · Reading Nook
+
+为睡前共读准备的手机网页应用：父母顺手保存，孩子自由表达，一起回看自己的成长。
+
+站点地址：**https://wangling517.github.io/Reading-Nook/**。实际部署状态以仓库的 Pages 记录为准。
+
+## 家庭使用
+
+- 使用管理员创建的家长邮箱账号登录；爸爸妈妈在不同设备登录同一个账号。
+- 书架支持准确字数、字数范围，以“万字”显示；每天可以记录阅读、原话和最长 3 分钟的声音。
+- 六座故事小岛随真实阅读经历解锁，不用每日连续打卡，也没有排名。
+- 书架、阅读日、分享和录音同步到 Supabase；文字草稿只留在当前设备。
+- 支持离线保存和联网补传。两台设备都有未同步修改时，先导出两份备份，再选择保留哪一份，不自动合并。
+- 在 Safari / 系统浏览器中添加到主屏幕。首次联网加载并显示“已可离线使用”后才可离线打开。
+
+详见 [使用说明](使用说明.md)。家庭备份、孩子的内容和录音不得上传到本公开仓库。
+
+## 管理员首次配置
+
+本版使用 GitHub Pages + Supabase Free，无付费邮件服务。不提供公开注册或邮件找回密码。免费服务仍受供应商配额和可用性约束，请保留独立备份。
+
+1. 在自己的 Supabase 项目 SQL Editor 中执行 [supabase/setup.sql](supabase/setup.sql)。成功通常显示 `Success. No rows returned`。
+2. Authentication → Users → Add user → Create new user，设置家长邮箱和密码，并启用 Auto Confirm User。不要把密码放进代码。
+3. Authentication → Sign In / Providers，关闭 **Allow new users to sign up**，保留 Email 登录。仅隐藏网页注册按钮不等于关闭后端注册。参考 [官方设置说明](https://supabase.com/docs/guides/auth/general-configuration)。
+4. `cloud-config.js` 只使用项目 URL 和 publishable 客户端公钥。不能写入 secret、service_role 或数据库密码。
+5. GitHub Settings → Pages，选择 `main` 分支、`/(root)`。站点使用相对路径，支持 `/Reading-Nook/` 子目录。
+6. 用家庭账号在两台设备登录，添加一条测试记录，确认双方显示“已同步到云端”，再试录音和回听。模拟测试不能代替此项真实验收。
+
+忘记密码时，由项目管理员在 Supabase 管理家庭账号；本版没有应用内自助邮件重置。网站公开仅公开程序文件；阅读快照按 `auth.uid()` 隔离，音频桶是私有的。
+
+## 同步与数据边界
+
+每个账号独立使用 IndexedDB。迁移旧版同网址数据需要明确点击“迁入”；原副本保留。换了网址或浏览器时，先从旧入口导出完整备份，再登录新网址恢复。恢复会替换当前账号内容并同步，请核对账号。
+
+版本比较、持久待传队列和操作 ID 防止并发覆盖、重复提交。冲突解决需要先保存本机和云端两份完整备份。退出仅清除当前设备登录状态，缓存保留供同账号重新登录；设备本身仍需屏幕锁保护。
+
+当前每个有效快照最多含 100MB 录音，每个文件最多 30MB。为避免其他离线设备失去声音，客户端不会物理删除云端音频对象。删除回忆后，已无引用的旧文件仍占云端空间，需要管理员在核对备份、当前快照及离线设备后维护。同步不是历史版本备份，不承诺免费空间永久足够。
+
+## 开发和验证
+
+静态文件和已构建的 SDK 均已提交，部署无须构建。维护依赖使用 Node.js 22 或更高版本：
+
+```sh
+npm ci
+npm test
+npm run build:vendor
+npm start
+```
+
+本地入口为 `http://127.0.0.1:4177`；不能把此地址作为手机公网地址，也不支持直接双击 HTML 完整运行。
+
+`tests/browser-cloud.cjs` 使用 Playwright 和本机 Edge，模拟 Supabase，完全隔离于真实家庭数据。可设置 `READING_PLAYWRIGHT` 指向已安装的 Playwright 包后执行 `node tests/browser-cloud.cjs`。
+
+发布前验证：19 项单元测试；浏览器覆盖账号隔离、令牌刷新、两设备传输、离线补传、丢失响应重试、冲突备份、原生 IndexedDB 原子写入、录音与 PWA 离线、旧版迁移及手机宽度适配。真实登录和跨账号云端权限还需部署环境验收。
+
+SDK 许可见 [vendor/THIRD-PARTY-NOTICES.txt](vendor/THIRD-PARTY-NOTICES.txt)。插画和图标来自本项目，无第三方图片、字体和分析脚本。

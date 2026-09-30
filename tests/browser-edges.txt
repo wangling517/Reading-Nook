@@ -1,0 +1,35 @@
+async (page) => {
+  const ctx=await page.context().browser().newContext({viewport:{width:320,height:720}}),p=await ctx.newPage(),checks=[];
+  p.on('dialog',d=>d.accept());const check=(ok,name)=>{if(!ok)throw new Error(name);checks.push(name);};
+  const snapshot=()=>p.evaluate(async()=>{const store=await import('./store.js');return store.snapshot();});
+  try{
+    await p.goto('http://127.0.0.1:4177');await p.locator('[data-action=new-voice]').waitFor();
+    await p.locator('[data-action=new-voice]').click();
+    await p.evaluate(()=>{navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('denied','NotAllowedError');};});
+    await p.locator('[data-action=record]').click();await p.waitForFunction(()=>document.querySelector('.form-error')?.textContent.includes('未获授权'));
+    await p.locator('textarea').fill('麦克风没开，也能记原话');await p.locator('button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    check((await snapshot()).state.shares.length===1,'麦克风拒绝后仍可保存文字');
+    await p.evaluate(async()=>{await navigator.serviceWorker.ready;});await p.waitForFunction(()=>!!navigator.serviceWorker.controller);await ctx.setOffline(true);
+    await p.evaluate(()=>{navigator.mediaDevices.getUserMedia=async()=>{const c=new AudioContext(),o=c.createOscillator(),d=c.createMediaStreamDestination();o.connect(d);o.start();window.__audio={c,o};return d.stream;};});
+    await p.locator('[data-action=new-voice]').click();await p.locator('[data-action=record]').click();await p.locator('[data-action=stop-record]').waitFor();await p.waitForTimeout(700);
+    await p.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));Object.defineProperty(document,'hidden',{configurable:true,value:false});});
+    await p.locator('#voice-area audio').waitFor();check((await p.locator('#toast').innerText()).includes('可能不完整'),'模拟切后台停止录音并提示不完整');
+    await p.locator('#share-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    check((await snapshot()).audios.length===1,'离线可保存实际MediaRecorder音频');
+    await ctx.setOffline(false);await p.locator('.bottom-nav [data-tab=memories]').click();
+    await p.locator('[data-action=backdate]').click();await p.locator('input[name=date]').fill('2025-01-01');await p.locator('input[name=minutes]').fill('10');await p.locator('#day-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    await p.locator('[data-action=backdate]').click();await p.locator('input[name=date]').fill('2025-01-02');await p.locator('#day-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    await p.locator('[data-action=edit-day][data-date="2025-01-01"]').click();await p.locator('input[name=date]').fill('2025-01-02');await p.locator('#day-form button[type=submit]').click();await p.waitForFunction(()=>document.querySelector('.form-error')?.textContent.includes('已有阅读记录'));
+    check((await snapshot()).state.days.length===2,'修改日期冲突不覆盖已有阅读日');await p.getByRole('button',{name:'关闭',exact:true}).click();
+    await p.locator('[data-action=edit-day][data-date="2025-01-01"]').click();await p.locator('[data-action=delete-day]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    check((await snapshot()).state.days.length===1&&(await snapshot()).state.shares.length===2,'删除阅读日不删除独立分享');
+    await p.locator('.bottom-nav [data-tab=tonight]').click();await p.locator('[data-action=shelf]').click();await p.locator('[data-action=add-book]').click();
+    await p.locator('input[name=title]').fill('一本很长很长很长很长很长很长很长的书名');await p.locator('select[name=status]').selectOption('done');await p.locator('#book-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    await p.locator('[data-action=shelf-filter][data-filter=done]').click();check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'320px长书名书架不溢出');
+    await p.locator('[data-action=edit-book]').click();await p.locator('[data-action=archive-book]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    check((await snapshot()).state.books[0].archived&&(await snapshot()).state.books[0].status==='done','移除已完成书籍保留完成事实');
+    await p.locator('[data-action=settings]').click();await p.locator('[data-action=archived]').click();await p.locator('[data-action=restore-book]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    check((await snapshot()).state.books.length===1&&!(await snapshot()).state.books[0].archived,'恢复书籍不产生重复');
+    return {checks};
+  }finally{await ctx.close();}
+}

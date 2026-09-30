@@ -1,0 +1,72 @@
+async (page) => {
+  const context=await page.context().browser().newContext({viewport:{width:390,height:844},acceptDownloads:true});
+  const p=await context.newPage(),errors=[],checks=[];
+  p.on('pageerror',e=>errors.push(e.message));p.on('dialog',d=>d.accept());
+  const check=(yes,name)=>{if(!yes)throw new Error(name);checks.push(name);};
+  const snap=()=>p.evaluate(async()=>{const s=await import('./store.js');return s.snapshot();});
+  const goTab=async(name)=>p.locator(`.bottom-nav [data-tab="${name}"]`).click();
+  try {
+    await p.goto('http://127.0.0.1:4177/');await p.getByRole('heading',{name:'故事，慢慢长大'}).waitFor();
+    await p.locator('[data-action=new-share]').click();
+    await p.locator('textarea[name=text]').fill('月亮为什么会跟着我？ <img src=x onerror=alert(1)>');
+    await p.getByRole('button',{name:'收藏这一刻',exact:true}).click();await p.locator('#sheet').waitFor({state:'hidden'});
+    let s=await snap();check(s.state.shares.length===1&&s.state.days.length===0,'仅分享不增加阅读日');
+    await p.getByRole('button',{name:'选一本',exact:true}).click();await p.getByRole('button',{name:'＋ 添加一本书',exact:true}).click();
+    await p.locator('input[name=title]').fill('夏洛的网');await p.locator('input[name=author]').fill('E. B. 怀特');
+    await p.locator('#book-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    await p.locator('[data-action=checkin]').dblclick();s=await snap();check(s.state.days.length===1,'一键阅读重复点击不重复');
+    if(!(await p.locator('#sheet').isVisible()))await p.locator('[data-action=edit-today]').click();
+    await p.locator('[data-action=minutes][data-value="20"]').click();await p.locator('#day-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    await p.reload();await p.getByRole('heading',{name:'故事，慢慢长大'}).waitFor();s=await snap();check(s.state.days[0].minutes===20&&s.state.books[0].title==='夏洛的网','刷新后书籍和时长保留');
+    await goTab('memories');check(await p.locator('.quote').innerText()==='月亮为什么会跟着我？ <img src=x onerror=alert(1)>','用户文字按纯文本显示');
+    check(await p.locator('.memory-card img').count()===0,'分享不执行HTML');
+    await p.locator('[data-action=favorite]').click();s=await snap();check(s.state.shares[0].favorite,'收藏真实保存');
+    await goTab('tonight');await p.getByRole('button',{name:'我的书架',exact:false}).click();await p.locator('[data-action=edit-book]').click();
+    await p.locator('select[name=status]').selectOption('done');await p.locator('#book-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    await goTab('island');check(await p.locator('.map-node.unlocked').count()===2,'首个阅读日与读完一本分别点亮');
+    await goTab('tonight');await p.locator('[data-action=new-share]').click();await p.locator('textarea').fill('还没有说完的草稿');
+    await p.getByRole('button',{name:'关闭',exact:true}).click();await p.reload();await p.locator('[data-action=new-share]').click();
+    check(await p.locator('textarea').inputValue()==='还没有说完的草稿','文字草稿关闭刷新后可继续');
+    await p.locator('textarea').fill('');await p.getByRole('button',{name:'关闭',exact:true}).click();
+    await p.evaluate(()=>{window.__streams=[];navigator.mediaDevices.getUserMedia=async()=>{const ctx=new AudioContext();const osc=ctx.createOscillator();const dest=ctx.createMediaStreamDestination();osc.frequency.value=440;osc.connect(dest);osc.start();window.__streams.push({ctx,osc});return dest.stream;};});
+    for(let i=0;i<3;i++){
+      await p.locator('[data-action=new-voice]').click();await p.locator('[data-action=record]').click();await p.locator('[data-action=stop-record]').waitFor();
+      await p.waitForTimeout(700);await p.locator('[data-action=stop-record]').click();await p.locator('#voice-area audio').waitFor();
+      const playable=await p.locator('#voice-area audio').evaluate(a=>new Promise(resolve=>{if(a.readyState>=1)return resolve(true);a.onloadedmetadata=()=>resolve(true);a.onerror=()=>resolve(false);setTimeout(()=>resolve(false),3000);}));
+      check(playable,`第${i+1}段浏览器录音可解码`);await p.locator('textarea').fill(`测试声音${i+1}`);await p.locator('#share-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    }
+    s=await snap();check(s.audios.length===3&&s.state.shares.length===4,'三段录音均关联已保存回忆');
+    await p.locator('[data-action=settings]').click();const dlEvent=p.waitForEvent('download');await p.locator('[data-action=export]').click();const dl=await dlEvent;
+    const stream=await dl.createReadStream(),chunks=[];for await(const chunk of stream)chunks.push(chunk);const buffer=Buffer.concat(chunks);
+    await dl.saveAs('C:/Users/18652/Desktop/学习agent/三年级英语/阅读小屋/tests/test-audio-backup.json');
+    check(JSON.parse(buffer.toString()).payload.audios.length===3,'界面导出备份包含三段实际音频');
+    const broken=JSON.parse(buffer.toString());broken.payload.state.profile.name='corrupted';
+    await p.locator('#backup-file').setInputFiles({name:'bad.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(broken))});
+    await p.waitForFunction(()=>document.querySelector('#toast').textContent.includes('校验未通过'));s=await snap();check(s.state.shares.length===4,'损坏备份被拦截，旧记录保留');
+    await p.locator('#backup-file').setInputFiles({name:'backup.json',mimeType:'application/json',buffer});await p.getByRole('heading',{name:'恢复这份回忆'}).waitFor();
+    const beforeEvent=p.waitForEvent('download');await p.locator('[data-action=backup-before-restore]').click();await beforeEvent;
+    await p.locator('#restore-confirm').check();await p.locator('[data-action=restore]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    s=await snap();check(s.state.shares.length===4&&s.audios.length===3,'界面恢复不累加，三段声音保留');
+    await goTab('memories');await p.locator('[data-action=play-audio]').first().click();await p.locator('.memory-card audio').waitFor();
+    check(await p.locator('.memory-card audio').evaluate(a=>a.error===null),'恢复后的音频可以播放');
+    const atomic=await p.evaluate(async()=>{const store=await import('./store.js');const before=await store.snapshot();const original=IDBObjectStore.prototype.put;let count=0;IDBObjectStore.prototype.put=function(...args){if(this.name==='audio'&&++count===2)throw new DOMException('test quota','QuotaExceededError');return original.apply(this,args);};let rejected=false;try{await store.replaceAll({...before.state,shares:[]},before.audios);}catch{rejected=true;}finally{IDBObjectStore.prototype.put=original;}const after=await store.snapshot();return rejected&&after.state.shares.length===before.state.shares.length&&after.audios.length===before.audios.length;});
+    check(atomic,'恢复过程中写入失败，整笔事务回滚');
+    await goTab('tonight');await p.locator('[data-action=new-share]').click();await p.locator('textarea').fill('不能误报保存成功');
+    await p.evaluate(()=>{window.__put=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(){throw new DOMException('test quota','QuotaExceededError');};});
+    await p.locator('#share-form button[type=submit]').click();await p.waitForFunction(()=>document.querySelector('.form-error')?.textContent.includes('空间不足'));
+    await p.evaluate(()=>{IDBObjectStore.prototype.put=window.__put;});s=await snap();check(s.state.shares.length===4,'保存失败不新增记录且显示失败');
+    await p.locator('textarea').fill('');await p.getByRole('button',{name:'关闭',exact:true}).click();
+    await p.evaluate(async()=>{await navigator.serviceWorker.ready;});await p.waitForFunction(()=>!!navigator.serviceWorker.controller);
+    await context.setOffline(true);await p.reload();await p.getByRole('heading',{name:'故事，慢慢长大'}).waitFor();
+    await p.locator('[data-action=new-share]').click();await p.locator('textarea').fill('离线也能留下小想法');await p.locator('#share-form button[type=submit]').click();await p.locator('#sheet').waitFor({state:'hidden'});
+    check((await snap()).state.shares.length===5,'离线重载及保存文字成功');
+    await p.locator('[data-action=settings]').click();const offEvent=p.waitForEvent('download');await p.locator('[data-action=export]').click();await offEvent;check(true,'离线可生成备份文件');
+    await p.getByRole('button',{name:'关闭',exact:true}).click();await goTab('memories');await p.locator('[data-action=play-audio]').first().click();await p.locator('.memory-card audio').waitFor();check(await p.locator('audio').count()===1,'离线可读取已存录音');
+    await context.setOffline(false);await goTab('island');
+    await p.screenshot({path:'C:/Users/18652/Desktop/学习agent/三年级英语/阅读小屋/tests/island-mobile.png',fullPage:true});
+    for(const width of [320,360,390,430]){await p.setViewportSize({width,height:844});for(const t of ['tonight','memories','island']){await goTab(t);check(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px ${t}无横向溢出`);}}
+    await p.setViewportSize({width:390,height:844});await goTab('memories');await p.screenshot({path:'C:/Users/18652/Desktop/学习agent/三年级英语/阅读小屋/tests/memories-mobile.png',fullPage:true});
+    check(errors.length===0,'浏览器无未捕获异常');
+    return {checks,errors};
+  }finally{await context.close();}
+}
