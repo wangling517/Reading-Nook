@@ -1,4 +1,4 @@
-const CACHE='reading-house-shell-v2.2.0';
+const CACHE='reading-house-shell-v2.2.1';
 const ASSETS=['./pets-model.js','./pets-ui.js','./pet-art.js','./pets.css','./vendor/three.js',...['bunny','cat','dog','monkey','phoenix'].flatMap(id=>[0,1,2].map(stage=>'./pets/'+id+'-'+stage+'.png')),'./','./index.html','./styles.css','./island.css','./account.css','./reading.css','./reading-ui.js','./island.js','./app.js','./account-ui.js','./cloud-api.js','./cloud-config.js','./sync.js','./sync-model.js','./vendor/supabase.js','./core.js','./store.js','./backup.js','./recorder.js','./art.svg','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png','./icons/maskable-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS))));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{

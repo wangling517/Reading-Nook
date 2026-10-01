@@ -11,14 +11,26 @@ export const PET_ITEMS=[
   {id:'heart-rug',name:'爱心地毯',type:'rug',cost:3,desc:'一块软软的草莓色小地毯'},
   {id:'flower-bowl',name:'小花餐碗',type:'bowl',cost:3,desc:'每一餐，都开着一朵小花'}
 ];
-const createPets=()=>({version:1,selected:null,owned:[],rewardedDates:[],items:[],equipped:{scene:'room',rug:'basic',bowl:'basic'}});
+const createPets=()=>({version:2,selected:null,owned:[],rewardedDates:[],readingRewards:[],items:[],equipped:{scene:'room',rug:'basic',bowl:'basic'}});
+function readingStars(pets){const legacy=new Set(pets.rewardedDates);return legacy.size*3+(pets.readingRewards||[]).reduce((sum,r)=>sum+Math.max(0,2+r.ids.length-(legacy.has(r.date)?3:0)),0);}
+export function dailyReadingStars(pets,date){const count=pets.readingRewards?.find(r=>r.date===date)?.ids.length||0;return Math.max(pets.rewardedDates.includes(date)?3:0,count?2+count:0);}
 export function claimReadingStars(state){
-  if(!state.pets)return 0;const dates=new Set(state.pets.rewardedDates),before=dates.size;
-  for(const day of state.days)dates.add(day.date);state.pets.rewardedDates=[...dates].sort();return (dates.size-before)*3;
+  if(!state.pets)return 0;const p=state.pets,before=readingStars(p);
+  if(p.version===1){p.version=2;p.readingRewards=[];}
+  const claimed=new Set(p.readingRewards.flatMap(r=>r.ids)),byDate=new Map(p.readingRewards.map(r=>[r.date,r]));
+  for(const day of state.days){
+    for(const entry of day.readings||[day]){
+      if(!Number.isInteger(entry.minutes)||entry.minutes<1||claimed.has(entry.id))continue;
+      let reward=byDate.get(day.date);if(reward?.ids.length>=5)continue;
+      if(!reward){reward={date:day.date,ids:[]};p.readingRewards.push(reward);byDate.set(day.date,reward);}
+      reward.ids.push(entry.id);claimed.add(entry.id);
+    }
+  }
+  p.readingRewards.sort((a,b)=>a.date.localeCompare(b.date));return readingStars(p)-before;
 }
 function ensure(state){state.pets??=createPets();claimReadingStars(state);return state.pets;}
 export function petStage(feeds){return feeds>=9?2:feeds>=3?1:0;}
-export function petBalance(pets){if(!pets)return 3;return 3+pets.rewardedDates.length*3-Math.max(0,pets.owned.length-1)*6-pets.owned.reduce((sum,p)=>sum+p.feeds.length,0)-pets.items.reduce((sum,id)=>sum+(PET_ITEMS.find(i=>i.id===id)?.cost||0),0);}
+export function petBalance(pets){if(!pets)return 3;return 3+readingStars(pets)-Math.max(0,pets.owned.length-1)*6-pets.owned.reduce((sum,p)=>sum+p.feeds.length,0)-pets.items.reduce((sum,id)=>sum+(PET_ITEMS.find(i=>i.id===id)?.cost||0),0);}
 export function petSnapshot(state){const p=structuredClone(state.pets||createPets());const virtual={pets:p,days:state.days};claimReadingStars(virtual);return {...p,balance:petBalance(p)};}
 export function adoptPet(state,id){
   if(!PETS.some(p=>p.id===id))throw new Error('这位小伙伴还不存在。');
@@ -31,7 +43,7 @@ export function feedPet(state,id,operation){
   if(typeof operation!=='string'||!/^[-\w]{1,80}$/.test(operation))throw new Error('请重新试着喂一口。');
   const p=ensure(state),pet=p.owned.find(x=>x.id===id);if(!pet)throw new Error('先选择一位小伙伴吧。');
   if(p.owned.some(x=>x.feeds.includes(operation)))return false;
-  if(petBalance(p)<1)throw new Error('星星用完啦。记下今天读过的书，就有新的星星。');
+  if(petBalance(p)<1)throw new Error('星星用完啦。有时长的阅读每天前5次有奖励，最多7颗。');
   pet.feeds.push(operation);return true;
 }
 export function buyPetItem(state,id){
@@ -44,8 +56,13 @@ export function resetPetItem(state,type){if(!['scene','rug','bowl'].includes(typ
 export function validatePets(p,validDate){
   if(p===undefined)return true;
   const bad=()=>{throw new Error('宠物记录不完整或格式不正确，原有记录未改变。');};
-  if(!p||p.version!==1||!Array.isArray(p.owned)||p.owned.length>PETS.length||!Array.isArray(p.rewardedDates)||p.rewardedDates.length>50000||new Set(p.rewardedDates).size!==p.rewardedDates.length||p.rewardedDates.some(d=>!validDate(d))||!Array.isArray(p.items)||new Set(p.items).size!==p.items.length||p.items.some(id=>!PET_ITEMS.some(i=>i.id===id)))bad();
-  const ids=new Set(),feeds=new Set();for(const pet of p.owned){if(!pet||!PETS.some(x=>x.id===pet.id)||ids.has(pet.id)||!Array.isArray(pet.feeds)||pet.feeds.length>150003)bad();ids.add(pet.id);for(const id of pet.feeds){if(typeof id!=='string'||!/^[-\w]{1,80}$/.test(id)||feeds.has(id))bad();feeds.add(id);}}
+  if(!p||![1,2].includes(p.version)||!Array.isArray(p.owned)||p.owned.length>PETS.length||!Array.isArray(p.rewardedDates)||p.rewardedDates.length>50000||new Set(p.rewardedDates).size!==p.rewardedDates.length||p.rewardedDates.some(d=>!validDate(d))||!Array.isArray(p.items)||new Set(p.items).size!==p.items.length||p.items.some(id=>!PET_ITEMS.some(i=>i.id===id)))bad();
+  if(p.version===1?p.readingRewards!==undefined:!Array.isArray(p.readingRewards)||p.readingRewards.length>50000)bad();
+  const dates=new Set(),readings=new Set();for(const r of p.readingRewards||[]){
+    if(!r||!validDate(r.date)||dates.has(r.date)||!Array.isArray(r.ids)||r.ids.length<1||r.ids.length>5)bad();dates.add(r.date);
+    for(const id of r.ids){if(typeof id!=='string'||!/^[-\w]{1,80}$/.test(id)||readings.has(id))bad();readings.add(id);}
+  }
+  const ids=new Set(),feeds=new Set();for(const pet of p.owned){if(!pet||!PETS.some(x=>x.id===pet.id)||ids.has(pet.id)||!Array.isArray(pet.feeds)||pet.feeds.length>500003)bad();ids.add(pet.id);for(const id of pet.feeds){if(typeof id!=='string'||!/^[-\w]{1,80}$/.test(id)||feeds.has(id))bad();feeds.add(id);}}
   if((p.owned.length?!ids.has(p.selected):p.selected!==null||p.items.length>0)||!p.equipped||petBalance(p)<0)bad();
   for(const type of ['scene','rug','bowl']){const id=p.equipped[type];if(id!==(type==='scene'?'room':'basic')&&(!p.items.includes(id)||!PET_ITEMS.some(i=>i.id===id&&i.type===type)))bad();}
   return true;

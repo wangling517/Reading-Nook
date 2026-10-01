@@ -29,7 +29,7 @@ export function updateReadingForm(form){
   const mode=form.elements.timeMode.value;
   for(const [id,visible] of [['reading-times',mode==='clock'],['reading-minutes',mode==='minutes']]){const el=form.querySelector('#'+id);el.hidden=!visible;el.querySelectorAll('input').forEach(input=>input.disabled=!visible);}
   form.querySelectorAll('[data-action=reading-mode]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.mode===mode));
-  let minutes=null,message='只记读过，本次不计入分钟数。';
+  let minutes=null,message='只记读过，本次不计入分钟数，也不奖励星星。';
   try{if(mode==='clock'){minutes=timedMinutes(fromBeijing(form.elements.startedAt.value),fromBeijing(form.elements.endedAt.value));message=`本次 ${minutes} 分钟 · 保存后计入当天`;}else if(mode==='minutes'){minutes=Number(form.elements.minutes.value)||null;message=minutes?`本次 ${minutes} 分钟`:'填一个大约的分钟数就好。';}}catch(e){message=e.message==='Invalid time value'?'请填写完整的开始和结束时间。':e.message;}
   form.querySelector('#reading-estimate').textContent=message;
   const long=minutes>120,checkbox=form.elements.confirmLong;form.querySelector('#reading-long').hidden=!long;checkbox.disabled=!long;checkbox.required=long;
