@@ -7,6 +7,9 @@ import {hasContent,validateRemote} from './sync-model.js';
 import {loginView,accountView,conflictView} from './account-ui.js';
 import {encodeBackup,decodeBackup} from './backup.js';
 import {VoiceRecorder} from './recorder.js';
+import {PETS,adoptPet,feedPet,petStage,buyPetItem,resetPetItem,claimReadingStars} from './pets-model.js';
+import {petHome,collectionView,growthView,shopView,petRules,islandCompanion} from './pets-ui.js';
+import {mountPetStage,clearPetStage,animatePet} from './pet-art.js';
 import {renderIsland,chapterView,treasuresView} from './island.js';
 
 const $=s=>document.querySelector(s), main=$('#main'), sheet=$('#sheet'), body=$('#sheet-body');
@@ -30,18 +33,20 @@ function notify(message,undo=null){clearTimeout(toastTimer);const t=$('#toast');
 function failure(e){console.error(e);const message=e?.name==='QuotaExceededError'?'空间不足，未能保存。已有记录保留，请先导出备份。':e?.message||'这次未能保存，请重试。';const el=$('.form-error');if(el)el.textContent=message;notify(message);}
 function stopPlayback(){document.querySelectorAll('audio').forEach(a=>a.pause());}
 async function mutate(recipe,message='',adds=[],undo=null,timerId=null){
-  let unlocked=[];
+  let unlocked=[],earned=0;
   const writeStore=storage;
-  await writeStore.commit((s,timer)=>{recipe(s,timer);unlocked=achievements(s).filter(m=>m.done&&!s.celebrated.includes(m.id));s.celebrated.push(...unlocked.map(m=>m.id));},adds,true,true,timerId);
+  await writeStore.commit((s,timer)=>{recipe(s,timer);earned=claimReadingStars(s);unlocked=achievements(s).filter(m=>m.done&&!s.celebrated.includes(m.id));s.celebrated.push(...unlocked.map(m=>m.id));},adds,true,true,timerId);
   if(writeStore!==storage)return;const local=await writeStore.readLocal();if(writeStore!==storage)return;state=local.state;activeReading=local.timer;scheduleSync(true);
-  render();if(message)notify(unlocked.length?`${message} · ${unlocked[0].name}已点亮`:message,undo);
+  render();if(message)notify((unlocked.length?`${message} · ${unlocked[0].name}已点亮`:message)+(earned?` · +${earned} 颗星星`:''),undo);
 }
 function render(){
+  clearPetStage();
   document.body.classList.toggle('account-locked',!state);
   document.body.classList.toggle('reading-active',!!state&&!!activeReading&&tab==='tonight');
   if(!state){main.innerHTML=loginView(legacyExists);document.title='登录 · 阅读小屋';return;}
   stopPlayback();if(!sheet.open)releaseURLs();
   main.innerHTML=tab==='tonight'?tonightView():tab==='memories'?memoriesView():tab==='island'?renderIsland(state):shelfView();
+  mountPetStage(sheet.open?body:main);
   const banner=document.createElement('button');banner.className='cloud-banner';banner.dataset.action='account';banner.dataset.kind=syncStatus.kind;banner.textContent=syncStatus.message;main.prepend(banner);
   document.querySelectorAll('.bottom-nav button').forEach(b=>{if(b.dataset.tab===tab||(tab==='shelf'&&b.dataset.tab==='tonight'))b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
   document.title=`${state.profile.name?state.profile.name+'的':''}阅读小屋`;
@@ -51,9 +56,9 @@ function weekView(){
   return `<div class="week" aria-label="本周阅读日">${['一','二','三','四','五','六','日'].map((label,i)=>{const d=new Date(now);d.setUTCDate(d.getUTCDate()-dow+i);const key=d.toISOString().slice(0,10),read=state.days.some(x=>x.date===key);return `<div class="week-day"><span>${label}</span><span class="week-dot ${read?'read':''} ${key===today()?'current':''}" aria-label="${key}${read?' 已阅读':''}">${read?'✓':d.getUTCDate()}</span></div>`;}).join('')}</div>`;
 }
 function tonightView(){
-  const day=state.days.find(d=>d.date===today()),b=state.books.find(x=>x.id===state.selectedBook&&!x.archived),n=stats(state);
+  const day=state.days.find(d=>d.date===today()),b=state.books.find(x=>x.id===state.selectedBook&&!x.archived);
   return `<div class="intro"><div><h1>故事，慢慢长大</h1><p class="small muted">${state.profile.name?`${esc(state.profile.name)}的`:'属于我们的'}阅读时光</p></div><span class="date-chip">${Number(today().slice(5,7))}月${Number(today().slice(8))}日</span></div>
-  <div class="hero"><img src="./art.svg" alt="月光下的小屋亮着暖灯，书本和小树陪伴在一座岛上"/><div class="hero-caption"><span>留一盏灯，等一个故事</span><strong>今晚，读到哪里了？</strong></div><div class="hero-foot">${n.days?`已经一起走过 ${n.days} 个阅读日`:'从今晚的一页，开始我们的故事'}</div></div>
+  ${petHome(state)}
   <div class="section-head"><h2>枕边的一本书</h2><button class="text-btn" data-action="shelf">我的书架&nbsp; ›</button></div>
   <div class="book-card">${bookCover(b)}<div class="book-meta"><h3>${b?esc(b.title):'今晚，选一个故事'}</h3><span class="small muted">${b?esc(b.author||'慢慢读，不用着急'):'也可以先记录，稍后再选书'}</span>${formatBookWords(b)?`<p class="small muted">全书 ${formatBookWords(b)}</p>`:''}</div><button class="text-btn" data-action="choose-book">${b?'换一本':'选一本'}</button></div>
   ${readingControls(day,activeReading)}
@@ -69,8 +74,8 @@ function memoriesView(){
 }
 function shelfView(){const list=filterBooks(state.books,shelfFilter);return `<div class="back-heading"><button class="icon-btn" data-action="nav" data-tab="tonight" aria-label="回到今晚">‹</button><h1>我的小书架</h1></div><p class="small muted" style="margin-top:8px">读到哪里，都有一个位置。</p>${bookFilters(shelfFilter,'shelf-filter')}<button class="secondary" style="width:100%" data-action="add-book">＋ 放一本书进来</button>${list.length?`<div class="book-grid">${list.map(b=>`<article class="shelf-book">${bookCover(b,true)}<span class="tag shelf-status">${bookStatuses.find(([key])=>key===b.status)[1]}</span><h3 class="shelf-title">${esc(b.title)}</h3><p class="shelf-author">${esc(b.author||'作者未填写')}${b.category?' · '+esc(b.category):''}</p><p class="shelf-author">${formatBookWords(b)?'全书 '+formatBookWords(b):'字数待补充'}</p><div class="shelf-bottom"><button class="text-btn" data-action="select-book" data-id="${b.id}">今晚读这本</button><button data-action="edit-book" data-id="${b.id}">编辑</button></div></article>`).join('')}</div>`:`<div class="empty"><div class="empty-art">${icon('book')}</div><h3>${shelfFilter==='want'?'把想读的故事放进来':shelfFilter==='done'?'读完一本，就留下足迹':'哪一本正在陪伴你？'}</h3><p>只填书名，就可以开始。</p></div>`}`;}
 
-function openSheet(title,html,type=''){stopPlayback();modalType=type;modalDirty=false;$('#sheet-title').textContent=title;body.innerHTML=html;body.scrollTop=0;if(!sheet.open)sheet.showModal();sheet.scrollTop=0;}
-function closeRaw(){voice?.cancel();voice=null;clearTimeout(draftTimer);sheet.close();modalType='';modalDirty=false;voiceBlob=null;originalAudio=null;editingShare=null;removeAudio=false;restoreCandidate=null;body.innerHTML='';releaseURLs();scheduleSync();}
+function openSheet(title,html,type=''){clearPetStage();stopPlayback();modalType=type;modalDirty=false;$('#sheet-title').textContent=title;body.innerHTML=html;body.scrollTop=0;if(!sheet.open)sheet.showModal();sheet.scrollTop=0;mountPetStage(body); }
+function closeRaw(){clearPetStage();voice?.cancel();voice=null;clearTimeout(draftTimer);sheet.close();modalType='';modalDirty=false;voiceBlob=null;originalAudio=null;editingShare=null;removeAudio=false;restoreCandidate=null;body.innerHTML='';releaseURLs();scheduleSync();mountPetStage(main);}
 async function closeSheet(){
   if(voice?.active||voice?.starting||voiceBlob){if(!confirm('这段新录音还未保存。要放弃录音并关闭吗？'))return;}
   if(modalType==='share'&&!editingShare)await stashDraft();
@@ -133,7 +138,7 @@ async function startRecording(){
   try {await voice.start();if(!voice?.active)return;modalDirty=true;el.innerHTML='<div class="record-panel"><button class="record-button active" type="button" data-action="stop-record" aria-label="结束录音"></button><div class="record-time" id="record-clock">0:00</div><p>正在录音，点一下结束</p><p>请保持页面在前台，最长3分钟</p></div>';$('#share-form button[type=submit]').disabled=true;}catch(e){voice=null;renderVoice();failure(e);}
 }
 
-function openSettings(){const n=stats(state),backup=state.backup,dirty=!backup||backup.revision!==state.revision;openSheet('小屋设置',`${accountView(user,syncStatus,legacyExists)}<form id="profile-form"><div class="label-row"><label class="field" style="flex:1"><span>孩子的昵称 <em>选填</em></span><input name="name" maxlength="30" value="${esc(state.profile.name)}" placeholder="我的阅读小屋"></label><label class="field" style="width:85px"><span>年龄</span><input name="age" type="number" min="1" max="18" step="1" value="${state.profile.age}" placeholder="选填"></label></div><p class="form-error" role="alert"></p><button class="secondary" type="submit" style="width:100%">保存资料</button></form><section class="settings-section"><h3>把回忆，好好保存</h3><p>${user?'记录和声音会同步到家庭账号，也保存在本机。同步不能替代备份；换手机或清理数据前，请导出一份。':'旧记录仅保存在这台设备，登录后可迁入家庭账号。'}</p><div class="settings-status"><span>上次生成备份</span><span>${backup?shortDate(backup.at.slice(0,10)):'还没有备份'}</span></div><p>${dirty?'有尚未备份的内容':'当前内容已生成过备份'} · ${n.days}个阅读日，${n.shares}条回忆</p><div class="settings-row"><button class="secondary" data-action="export">导出完整备份</button><button class="secondary" data-action="import">从备份恢复</button></div><input type="file" id="backup-file" accept=".json,application/json" hidden><p style="margin-top:10px">备份包含原始录音，请保存到“文件”或自己的网盘。当前完整备份支持累计100MB录音；备份生成不代表你已将文件妥善保存。</p></section><section class="settings-section"><h3>放在手机桌面</h3><p>iPhone：用Safari打开 → 分享 → 添加到主屏幕。安卓：在系统浏览器菜单中选择安装应用或添加到主屏幕，具体入口以浏览器为准。</p>${installEvent?'<button class="secondary" data-action="install">添加到桌面</button>':''}<p>首次添加后，请确认桌面入口中的记录可见；以后固定从这个入口使用。</p><div class="settings-status"><span><i class="status-dot"></i>${offlineReady?'已可离线使用':'离线资源准备中'}</span><span>${user?'家庭同步版':'本机旧记录'}</span></div>${registration?.waiting||pendingReload?'<button class="secondary" data-action="update">新版已准备好 · 更新</button>':''}</section><section class="settings-section"><h3>收起来的书</h3><p>移除书籍不会抹去之前的阅读经历。</p><button class="secondary" data-action="archived">查看已移除的书</button></section><p class="small muted">日期按北京时间记录。版本 2.1 · 愿每一次阅读，都有自己的节奏。</p>`,'settings');}
+function openSettings(){const n=stats(state),backup=state.backup,dirty=!backup||backup.revision!==state.revision;openSheet('小屋设置',`${accountView(user,syncStatus,legacyExists)}<form id="profile-form"><div class="label-row"><label class="field" style="flex:1"><span>孩子的昵称 <em>选填</em></span><input name="name" maxlength="30" value="${esc(state.profile.name)}" placeholder="我的阅读小屋"></label><label class="field" style="width:85px"><span>年龄</span><input name="age" type="number" min="1" max="18" step="1" value="${state.profile.age}" placeholder="选填"></label></div><p class="form-error" role="alert"></p><button class="secondary" type="submit" style="width:100%">保存资料</button></form><section class="settings-section"><h3>把回忆，好好保存</h3><p>${user?'记录和声音会同步到家庭账号，也保存在本机。同步不能替代备份；换手机或清理数据前，请导出一份。':'旧记录仅保存在这台设备，登录后可迁入家庭账号。'}</p><div class="settings-status"><span>上次生成备份</span><span>${backup?shortDate(backup.at.slice(0,10)):'还没有备份'}</span></div><p>${dirty?'有尚未备份的内容':'当前内容已生成过备份'} · ${n.days}个阅读日，${n.shares}条回忆</p><div class="settings-row"><button class="secondary" data-action="export">导出完整备份</button><button class="secondary" data-action="import">从备份恢复</button></div><input type="file" id="backup-file" accept=".json,application/json" hidden><p style="margin-top:10px">备份包含原始录音，请保存到“文件”或自己的网盘。当前完整备份支持累计100MB录音；备份生成不代表你已将文件妥善保存。</p></section><section class="settings-section"><h3>放在手机桌面</h3><p>iPhone：用Safari打开 → 分享 → 添加到主屏幕。安卓：在系统浏览器菜单中选择安装应用或添加到主屏幕，具体入口以浏览器为准。</p>${installEvent?'<button class="secondary" data-action="install">添加到桌面</button>':''}<p>首次添加后，请确认桌面入口中的记录可见；以后固定从这个入口使用。</p><div class="settings-status"><span><i class="status-dot"></i>${offlineReady?'已可离线使用':'离线资源准备中'}</span><span>${user?'家庭同步版':'本机旧记录'}</span></div>${registration?.waiting||pendingReload?'<button class="secondary" data-action="update">新版已准备好 · 更新</button>':''}</section><section class="settings-section"><h3>收起来的书</h3><p>移除书籍不会抹去之前的阅读经历。</p><button class="secondary" data-action="archived">查看已移除的书</button></section><p class="small muted">日期按北京时间记录。版本 2.2 · 愿每一次阅读，都有自己的节奏。</p>`,'settings');}
 async function exportBackup(){
   const source=storage,epoch=accountEpoch,snap=await source.snapshot(),blob=await encodeBackup(snap.state,snap.audios),at=new Date().toISOString();
   if(epoch!==accountEpoch)throw new Error('账号已切换，请在当前账号重新导出备份。');
@@ -143,13 +148,23 @@ async function exportBackup(){
   notify('备份文件已生成，请确认保存到手机文件或网盘。');if(modalType==='settings')openSettings();return snap.state.revision;
 }
 function download(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),60000);}
-async function previewImport(file){if(!file)return;restoreCandidate=await decodeBackup(file);const n=stats(restoreCandidate.state),hasData=state.days.length||state.shares.length||state.books.length||state.draft||state.profile.name||state.profile.age;openSheet('恢复这份回忆',`<p class="notice">${n.days}个阅读日 · ${n.books}本已读完 · ${n.shares}条回忆 · ${restoreCandidate.audios.length}段声音</p><p class="small muted">恢复会完整替换当前记录，不会合并。${user?'登录状态下，恢复的内容也会上传并替换账号中的云端版本。':''}校验已通过，录音格式是否可播放仍取决于设备。</p>${hasData?'<button class="secondary" style="width:100%;margin-top:18px" data-action="backup-before-restore">先导出当前记录</button><label class="check-row" style="margin-top:14px"><input type="checkbox" id="restore-confirm" disabled>我已保存刚导出的当前备份</label>':''}<p class="form-error" role="alert"></p><button class="primary" style="margin-top:20px" data-action="restore" ${hasData?'disabled':''}>恢复并替换当前记录</button>`,'restore');}
+async function previewImport(file){if(!file)return;restoreCandidate=await decodeBackup(file);const n=stats(restoreCandidate.state),hasData=hasContent(state);openSheet('恢复这份回忆',`<p class="notice">${n.days}个阅读日 · ${n.books}本已读完 · ${n.shares}条回忆 · ${restoreCandidate.audios.length}段声音</p><p class="small muted">恢复会完整替换当前记录，不会合并。${user?'登录状态下，恢复的内容也会上传并替换账号中的云端版本。':''}校验已通过，录音格式是否可播放仍取决于设备。</p>${hasData?'<button class="secondary" style="width:100%;margin-top:18px" data-action="backup-before-restore">先导出当前记录</button><label class="check-row" style="margin-top:14px"><input type="checkbox" id="restore-confirm" disabled>我已保存刚导出的当前备份</label>':''}<p class="form-error" role="alert"></p><button class="primary" style="margin-top:20px" data-action="restore" ${hasData?'disabled':''}>恢复并替换当前记录</button>`,'restore');}
 
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-action]');if(!b||b.disabled||busy)return;
   const a=b.dataset.action;try {
     if(!state&&!['close','retry','local-mode','login-help','show-login'].includes(a))return;
     switch(a){
+      case 'pet-collection':openSheet('小伙伴收藏册',collectionView(state),'pets');break;
+      case 'pet-rules':openSheet('星星从故事里来',petRules,'pets');break;
+      case 'pet-shop':openSheet('给小屋一点甜',shopView(state),'pets');break;
+      case 'pet-growth':openSheet('陪你慢慢长大',growthView(state),'pets');break;
+      case 'pet-preview':openSheet('陪你慢慢长大',growthView(state,Number(b.dataset.stage)),'pets');break;
+      case 'pet-adopt':busy=true;await mutate(s=>adoptPet(s,b.dataset.id),'小伙伴来陪你啦');closeRaw();break;
+      case 'pet-feed':{busy=true;const id=b.dataset.id,pet=PETS.find(p=>p.id===id),before=petStage(state.pets.owned.find(p=>p.id===id).feeds.length);await mutate(s=>feedPet(s,id,uid()));const after=petStage(state.pets.owned.find(p=>p.id===id).feeds.length);animatePet();const greeting=$('#pet-message');if(greeting)greeting.textContent=after>before?pet.name+'长大啦！看看'+pet.stages[after]+'的新模样。':pet.words[0];$('.pet-home')?.classList.add('pet-celebrate');notify(after>before?'新的成长模样已收藏，可以在成长相册里回看。':'喂好啦 · 用掉 1 颗星星');break;}
+      case 'pet-touch':animatePet();if($('#pet-message'))$('#pet-message').textContent=PETS.find(p=>p.id===state.pets.selected).words[1];break;
+      case 'pet-buy':busy=true;await mutate(s=>buyPetItem(s,b.dataset.id),'小屋布置好啦');closeRaw();break;
+      case 'pet-reset':busy=true;await mutate(s=>resetPetItem(s,b.dataset.type),'已换回原来的样子');closeRaw();break;
       case 'account':openSettings();break;
       case 'login-help':openSheet('家长账号怎么使用', '<p class="notice">这是家庭自用版，账号由项目管理员预先创建，不开放公众注册。</p><p class="small muted">请使用管理员为家庭设置的邮箱和密码。它与 GitHub 登录、Supabase 控制台和数据库密码无关。忘记密码时，请由项目管理员协助重置。</p>','login-help');break;
       case 'show-login':closeRaw();state=null;render();break;
@@ -198,7 +213,7 @@ document.addEventListener('click',async e=>{
       case 'delete-share':if(confirm('删除这条回忆及其录音？删除后只能从已有备份恢复。'))await mutate(s=>{s.shares=s.shares.filter(x=>x.id!==b.dataset.id);},'这条回忆已删除');break;
       case 'play-audio': {const epoch=accountEpoch;const x=await storage.getAudio(b.dataset.id);if(epoch!==accountEpoch)break;if(!x)throw new Error('未找到录音，请尝试从完整备份恢复。');stopPlayback();const parent=b.parentElement;const audio=document.createElement('audio');audio.controls=true;audio.src=audioURL(x.blob);parent.replaceChildren(audio);audio.onerror=()=>{parent.replaceChildren(document.createTextNode('此设备无法播放这段声音。'));const btn=document.createElement('button');btn.className='text-btn';btn.dataset.action='download-audio';btn.dataset.id=x.id;btn.textContent='导出原音频';parent.append(btn);};await audio.play().catch(()=>{});break;}
       case 'download-audio':{const epoch=accountEpoch;const x=await storage.getAudio(b.dataset.id);if(epoch!==accountEpoch)break;if(!x)throw new Error('未找到这段声音。');const ext=x.blob.type.includes('mp4')?'m4a':x.blob.type.includes('ogg')?'ogg':x.blob.type.includes('wav')?'wav':'webm';download(x.blob,`孩子的声音-${x.id.slice(0,8)}.${ext}`);break;}
-      case 'milestone':{const m=achievements(state).find(x=>x.id===b.dataset.id);if(m)openSheet(m.name,chapterView(m),'chapter');break;}
+      case 'milestone':{const m=achievements(state).find(x=>x.id===b.dataset.id);if(m)openSheet(m.name,chapterView(m)+islandCompanion(state,m),'chapter');break;}
       case 'treasures':openSheet('我的探险宝藏',treasuresView(state),'treasures');break;
       case 'adventure-go':{const kind=b.dataset.kind;closeRaw();tab=kind==='books'?'shelf':'tonight';if(kind==='books')shelfFilter=state.books.some(x=>!x.archived&&x.status==='reading')?'reading':'want';render();window.scrollTo(0,0);break;}
       case 'milestone-evidence':{const m=achievements(state).find(x=>x.id===b.dataset.id);if(!m?.done)break;if(m.kind==='days'){closeRaw();tab='memories';memoryFilter='all';render();window.scrollTo(0,0);}else openSheet('读完的那些故事',state.books.filter(x=>x.status==='done').sort((a,b)=>b.completedDate.localeCompare(a.completedDate)).map(x=>`<div class="book-card">${bookCover(x)}<div class="book-meta"><h3>${esc(x.title)}</h3><p class="small muted">${shortDate(x.completedDate)} 读完${x.archived?' · 已收起':''}</p></div></div>`).join(''),'completed');break;}

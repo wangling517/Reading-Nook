@@ -1,7 +1,7 @@
 import {validateState} from './core.js';
 export const MAX_AUDIO_BYTES=100*1024*1024;
 export const cloudState=state=>({...structuredClone(state),revision:0,draft:null,backup:null});
-export const hasContent=state=>!!(state.books.length||state.days.length||state.shares.length||state.draft||state.profile.name||state.profile.age);
+export const hasContent=state=>!!(state.books.length||state.days.length||state.shares.length||state.draft||state.profile.name||state.profile.age||state.pets?.owned?.length);
 export function syncDecision(sync,remote){
   const version=remote?.version||0;
   if(sync.pending&&remote?.operation_id===sync.pending.operation)return 'acknowledge';

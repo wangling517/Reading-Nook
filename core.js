@@ -1,3 +1,4 @@
+import {validatePets} from './pets-model.js';
 export const VERSION = 1;
 export const uid = () => crypto.randomUUID();
 export const today = () => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -152,6 +153,7 @@ const isID=id=>typeof id==='string'&&/^[\w-]{1,80}$/.test(id);
 const timestamp=value=>bounded(value,40)&&Number.isFinite(Date.parse(value));
 const fail=()=>{throw new Error('备份内容不完整或格式不受支持，原有记录未改变。');};
 export function validateState(s,audioIds=[]) {
+  validatePets(s?.pets,validDate);
   if(!s||s.version!==VERSION||!Number.isSafeInteger(s.revision)||s.revision<0||!s.profile||!bounded(s.profile.name,30)||!(s.profile.age===''||(Number.isInteger(s.profile.age)&&s.profile.age>=1&&s.profile.age<=18))) fail();
   if(!['books','days','shares','celebrated'].every(k=>Array.isArray(s[k])&&s[k].length<=50000)) fail();
   const ids=new Set();for(const item of [...s.books,...s.days,...s.shares]) {if(!item||!isID(item.id)||ids.has(item.id)) fail();ids.add(item.id);}

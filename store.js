@@ -48,7 +48,7 @@ export function createStore(owner=null){
   async function cancelTimer(id){return transaction(context=>{
     if(context.timer?.id!==id)throw new Error('计时已发生变化，请重新打开。');context.timer=null;
   });}
-  function replaceData(target,incoming,audios,audio){Object.assign(target,structuredClone(incoming));audio.clear();for(const a of audios)audio.put(a);}
+  function replaceData(target,incoming,audios,audio){delete target.pets;Object.assign(target,structuredClone(incoming));audio.clear();for(const a of audios)audio.put(a);}
   async function replaceAll(next,audios){return transaction(context=>{const {state,sync,audio}=context;replaceData(state,next,audios,audio);context.timer=null;sync.generation++;return state;});}
   async function setPending(generation,pending){return transaction(({sync})=>{if(sync.pending)return sync.pending;if(sync.generation!==generation)return null;sync.pending=pending;return pending;});}
   async function acknowledge(operation,version){return transaction(({sync})=>{

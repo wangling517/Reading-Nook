@@ -1,0 +1,2 @@
+# Generated shader strings retain upstream whitespace.
+vendor/three.js -whitespace linguist-generated=true
